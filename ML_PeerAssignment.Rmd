@@ -1,0 +1,116 @@
+---
+title: "ML_PeerAssignment"
+author: "John Lafin"
+date: "10/9/2020"
+output: html_document
+---
+
+## Summary
+
+The goal of this project is to predict the manner in which a given individual performed an exercise. Training data is provided as 19,622 measurements of 159 variables, along with the exercise (the 'classe' variable). 
+
+Data pre-processing involved eliminating sparse variables (>95% missing values). Supplied training data was split into training and validation sets, and two models were built, a gradient boosting machine model (GBM) and a random forest model (RF). 10-fold cross validation was used during the training these models for parameter tuning. These methods were selected due to their typically strong performance for classification problems, and because following pre-processing there remained no missing values. 
+
+These models were used to predict the outcome variable on the validation set. The RF model performed slightly better than the GBM model with an estimated out-of-sample error of 0.0007.
+
+## Data analysis
+
+Load libraries:
+
+```{r, message = FALSE}
+library(tidyverse)
+library(caret)
+set.seed(12345)
+```
+
+Read in the data, converting blanks and Excel errors into NA values:
+
+```{r, warning = F}
+column_types <- paste0('nfnncc',paste0(rep('n',153), collapse = ''))
+training <- read_csv("./pml-training.csv", 
+                     col_types = paste0(column_types,'f'),
+                     na = c('#DIV/0!','','NA'))
+testing <- read_csv("pml-testing.csv",
+                    col_types = paste0(column_types,'n'),
+                    na = c('#DIV/0!','','NA'))
+```
+
+X here are just row numbers, so can be removed. 
+
+```{r}
+training <- training %>% select(!X1)
+testing <- testing %>% select(!X1)
+```
+
+Let's look for columns with little information.
+
+```{r}
+na.prop <- function(x){
+  sum(is.na(x))/length(x)
+}
+
+nums <- apply(training, 2, na.prop)
+
+sum(nums > 0.95)
+```
+
+100 of the features have >95% missing values. These features are unlikely to be informative, so we will remove them from consideration.
+
+```{r}
+cols_to_rm <- names(which(nums > 0.5))
+
+training <- training %>% 
+  select(-all_of(cols_to_rm))
+testing <- testing %>%
+  select(-all_of(cols_to_rm))
+```
+
+This is a classification problem. Two models that could be useful here are boosting or random forests. Here we'll split the training data into a training and testing set. 
+
+```{r, warning = F}
+inTrain <- createDataPartition(y = training$classe, 
+                               p = 0.67, 
+                               list = FALSE)
+training_training <- training[inTrain,]
+training_validation <- training[-inTrain,]
+```
+
+Now, train both a GBM and random forest model with cross validation to compare the performance of the two:
+
+```{r, cache = TRUE}
+trCtrl <- trainControl(method = 'cv', number = 10)
+# Takes about 10 min
+gbm_fit <- train(classe ~ ., 
+                 data = training_training,
+                 method = 'gbm', 
+                 trControl = trCtrl,
+                 verbose = FALSE)
+```
+
+```{r, cache = TRUE}
+#Takes about 20 min
+rf_fit <- train(classe ~ .,
+                data = training_training,
+                method = 'rf',
+                trControl = trCtrl)
+```
+
+Make predictions and compare accuracy:
+```{r}
+gbm_pred <- predict(gbm_fit, training_validation)
+rf_pred <- predict(rf_fit, training_validation)
+gbm_acc <- confusionMatrix(gbm_pred, training_validation$classe)$overall[['Accuracy']]
+rf_acc <- confusionMatrix(rf_pred, training_validation$classe)$overall[['Accuracy']]
+data.frame(accuracy = c(GBM = gbm_acc, RF = rf_acc),
+           error = c(1 - gbm_acc, 1 - rf_acc))
+```
+
+Both models perform very well, but RF is slightly more accurate, with an error rate of 0.00077. Therefore we'll use this model for the final predictions.
+
+## Final predictions
+
+```{r}
+final_pred <- predict(rf_fit, testing)
+write_csv(as.data.frame(final_pred), './final_predictions.csv')
+```
+
